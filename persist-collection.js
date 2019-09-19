@@ -6,6 +6,12 @@ import { LocalCollection } from 'meteor/minimongo'
 extendGetItems(localforage)
 extendSetItems(localforage)
 
+const DRIVERS = [
+	// localforage.WEBSQL,
+	localforage.INDEXEDDB,
+	localforage.LOCALSTORAGE
+];
+
 Mongo.Collection.prototype._isCommon = false
 
 Mongo.Collection.prototype.isCommon = function (bool) {
@@ -23,7 +29,7 @@ Mongo.Collection.prototype.isSyncing = function () {
 Mongo.Collection.prototype.setPersisted = function (data) {
 
   const store = localforage.createInstance({
-    driver: [localforage.WEBSQL, localforage.INDEXEDDB, localforage.LOCALSTORAGE],
+    driver: DRIVERS,
     name: 'persisted_collections',
     storeName: this._name
   })
@@ -34,7 +40,7 @@ Mongo.Collection.prototype.setPersisted = function (data) {
 Mongo.Collection.prototype.getPersisted = function (ids) {
 
   const store = localforage.createInstance({
-    driver: [localforage.WEBSQL, localforage.INDEXEDDB, localforage.LOCALSTORAGE],
+    driver: DRIVERS,
     name: 'persisted_collections',
     storeName: this._name
   })
@@ -50,7 +56,7 @@ Mongo.Collection.prototype.getPersisted = function (ids) {
 Mongo.Collection.prototype.removePersisted = function (ids) {
 
   const store = localforage.createInstance({
-    driver: [localforage.WEBSQL, localforage.INDEXEDDB, localforage.LOCALSTORAGE],
+    driver: DRIVERS,
     name: 'persisted_collections',
     storeName: this._name
   })
@@ -66,7 +72,7 @@ Mongo.Collection.prototype.removePersisted = function (ids) {
 Mongo.Collection.prototype.clearPersisted = function () {
 
   const store = localforage.createInstance({
-    driver: [localforage.WEBSQL, localforage.INDEXEDDB, localforage.LOCALSTORAGE],
+    driver: DRIVERS,
     name: 'persisted_collections',
     storeName: this._name
   })
@@ -83,7 +89,7 @@ Mongo.Collection.prototype.syncPersisted = function () {
     col._isSyncing.set(true)
 
     const store = localforage.createInstance({
-      driver: [localforage.WEBSQL, localforage.INDEXEDDB, localforage.LOCALSTORAGE],
+      driver: DRIVERS,
       name: 'persisted_collections',
       storeName: col._name
     })
@@ -192,10 +198,27 @@ Mongo.Collection.prototype.attachPersister = function (selector, options) {
   col._persisters[persisterId] = persister
 
   persister._store = localforage.createInstance({
-    driver: [localforage.WEBSQL, localforage.INDEXEDDB, localforage.LOCALSTORAGE],
+    driver: DRIVERS,
     name: 'persisted_collections',
     storeName: col._name
   })
+
+  persister._queue = [];
+
+  persister._queuePush = (_id, doc, type) => {
+	  persister._queue.push({_id, doc, type});
+	  // _id=="2AtfFjKcdvaQew8Wa" && console.warn(type, _id, JSON.stringify(doc));
+	  if (persister._queue.length==1) persister._queuePop();
+  }
+
+  persister._queuePop = () => {
+		const item = persister._queue[0];
+		item && persister._store.setItem(item._id, item.doc).then(()=>{
+			persister._queue.shift();
+			// console.log(`  ${item.type} done`, item._id, JSON.stringify(item.doc));
+			persister._queuePop();
+		}).catch(console.error)
+  }
 
   persister._observeHandle = col.find(selector || {}, options || {}).observe({
     added (doc) {
@@ -206,7 +229,8 @@ Mongo.Collection.prototype.attachPersister = function (selector, options) {
       if (!Meteor.status().connected && col._isCommon)
         doc._insertedOffline = true
 
-      persister._store.setItem(_id, doc).catch(console.error)
+      // persister._store.setItem(_id, doc).catch(console.error)
+	  persister._queuePush(_id, doc, 'added');
     },
     changed (doc) {
 
@@ -216,7 +240,9 @@ Mongo.Collection.prototype.attachPersister = function (selector, options) {
       if (!Meteor.status().connected && col._isCommon)
         doc._updatedOffline = true
 
-      persister._store.setItem(_id, doc).catch(console.error)
+
+      // persister._store.setItem(_id, doc).catch(console.error)
+	  persister._queuePush(_id, doc, 'changed');
     },
     removed (doc) {
 
